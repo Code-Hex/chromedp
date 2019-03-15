@@ -8,6 +8,8 @@ package chromedp
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
 	"sync/atomic"
 
@@ -81,6 +83,37 @@ func (b *Browser) send(method cdproto.MethodType, params easyjson.RawMessage) er
 		return err
 	}
 	return b.conn.Write(buf)
+}
+
+func (b *Browser) run(ctx context.Context) {
+	defer b.conn.Close()
+
+	for {
+		select {
+		default:
+			msg, err := b.read()
+			if err != nil {
+				return
+			}
+
+			// TODO: will we ever receive anything here?
+			fmt.Printf("%#v\n", msg)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (b *Browser) read() (*cdproto.Message, error) {
+	buf, err := b.conn.Read()
+	if err != nil {
+		return nil, err
+	}
+	msg := new(cdproto.Message)
+	if err := json.Unmarshal(buf, msg); err != nil {
+		return nil, err
+	}
+	return msg, nil
 }
 
 // sendToTarget writes the supplied message to the target.
