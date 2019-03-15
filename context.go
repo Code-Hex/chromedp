@@ -3,7 +3,9 @@ package chromedp
 import (
 	"context"
 	"encoding/json"
-	"net/http"
+	"fmt"
+
+	"github.com/chromedp/cdproto/target"
 )
 
 // Executor
@@ -84,20 +86,18 @@ func Run(ctx context.Context, action Action) error {
 }
 
 func (c *Context) newHandler(ctx context.Context) error {
-	// TODO: add RemoteAddr() to the Transport interface?
-	conn := c.browser.conn.(*Conn).Conn
-	addr := conn.RemoteAddr()
-	url := "http://" + addr.String() + "/json/new"
-	resp, err := http.Get(url)
+	params := target.CreateTarget("about:blank")
+	targetID, err := params.Do(ctx, c.browser)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	var wurl withWebsocketURL
-	if err := json.NewDecoder(resp.Body).Decode(&wurl); err != nil {
-		return err
-	}
-	c.handler, err = NewTargetHandler(ctx, wurl.WebsocketURL)
+
+	// TODO: use sendMessageToTarget instead
+	conn := c.browser.conn.(*Conn).Conn
+	addr := conn.RemoteAddr()
+	wurl := fmt.Sprintf("ws://%s/devtools/page/%s", addr, targetID)
+
+	c.handler, err = NewTargetHandler(ctx, wurl)
 	if err != nil {
 		return err
 	}

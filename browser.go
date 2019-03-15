@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 	"sync/atomic"
 
 	"github.com/chromedp/cdproto"
@@ -27,6 +28,16 @@ type Browser struct {
 
 	// next is the next message id.
 	next int64
+
+	// TODO: rethink this without a lock
+	respByIDMu sync.RWMutex
+	respByID   map[int64]chan *cdproto.Message
+
+	// qcmd is the outgoing message queue.
+	qcmd chan *cdproto.Message
+
+	// qres is the incoming command result queue.
+	qres chan *cdproto.Message
 
 	// logging funcs
 	logf func(string, ...interface{})
@@ -74,8 +85,8 @@ func (b *Browser) Shutdown() error {
 // send writes the supplied message and params.
 func (b *Browser) send(method cdproto.MethodType, params easyjson.RawMessage) error {
 	msg := &cdproto.Message{
-		Method: method,
 		ID:     atomic.AddInt64(&b.next, 1),
+		Method: method,
 		Params: params,
 	}
 	buf, err := msg.MarshalJSON()
@@ -85,23 +96,144 @@ func (b *Browser) send(method cdproto.MethodType, params easyjson.RawMessage) er
 	return b.conn.Write(buf)
 }
 
+func (b *Browser) Execute(ctx context.Context, methodType string, params json.Marshaler, res json.Unmarshaler) error {
+	paramsMsg := emptyObj
+	if params != nil {
+		var err error
+		if paramsMsg, err = json.Marshal(params); err != nil {
+			return err
+		}
+	}
+
+	id := atomic.AddInt64(&b.next, 1)
+
+	ch := make(chan *cdproto.Message, 1)
+	b.respByIDMu.Lock()
+	b.respByID[id] = ch
+	b.respByIDMu.Unlock()
+
+	b.qcmd <- &cdproto.Message{
+		ID:     id,
+		Method: cdproto.MethodType(methodType),
+		Params: paramsMsg,
+	}
+	errch := make(chan error, 1)
+	go func() {
+		defer close(errch)
+
+		select {
+		case msg := <-ch:
+			switch {
+			case msg == nil:
+				errch <- ErrChannelClosed
+
+			case msg.Error != nil:
+				errch <- msg.Error
+
+			case res != nil:
+				errch <- json.Unmarshal(msg.Result, res)
+			}
+
+		case <-ctx.Done():
+			errch <- ctx.Err()
+		}
+
+		b.respByIDMu.Lock()
+		defer b.respByIDMu.Unlock()
+		delete(b.respByID, id)
+	}()
+
+	return <-errch
+}
+
+func (b *Browser) Start(ctx context.Context) error {
+	b.qcmd = make(chan *cdproto.Message)
+	b.qres = make(chan *cdproto.Message)
+	b.respByID = make(map[int64]chan *cdproto.Message)
+
+	go b.run(ctx)
+
+	return nil
+}
+
 func (b *Browser) run(ctx context.Context) {
 	defer b.conn.Close()
 
-	for {
-		select {
-		default:
-			msg, err := b.read()
-			if err != nil {
+	// add cancel to context
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		defer cancel()
+
+		for {
+			select {
+			default:
+				msg, err := b.read()
+				if err != nil {
+					return
+				}
+
+				switch {
+				case msg.Method != "":
+					fmt.Printf("method: %+v\n", msg)
+
+				case msg.ID != 0:
+					b.qres <- msg
+
+				default:
+					b.errf("ignoring malformed incoming message (missing id or method): %#v", msg)
+				}
+
+			case <-ctx.Done():
 				return
 			}
+		}
+	}()
 
-			// TODO: will we ever receive anything here?
-			fmt.Printf("%#v\n", msg)
+	// process queues
+	for {
+		select {
+		case res := <-b.qres:
+			err := b.processResult(res)
+			if err != nil {
+				b.errf("could not process result for message %d: %v", res.ID, err)
+			}
+
+		case cmd := <-b.qcmd:
+			err := b.processCommand(cmd)
+			if err != nil {
+				b.errf("could not process command message %d: %v", cmd.ID, err)
+			}
+
 		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+// processResult processes an incoming command result.
+func (b *Browser) processResult(msg *cdproto.Message) error {
+	b.respByIDMu.RLock()
+	defer b.respByIDMu.RUnlock()
+
+	ch, ok := b.respByID[msg.ID]
+	if !ok {
+		return fmt.Errorf("id %d not present in response map", msg.ID)
+	}
+	defer close(ch)
+
+	ch <- msg
+	return nil
+}
+
+// processCommand writes a command to the client connection.
+func (b *Browser) processCommand(cmd *cdproto.Message) error {
+	buf, err := json.Marshal(cmd)
+	if err != nil {
+		return err
+	}
+	return b.conn.Write(buf)
 }
 
 func (b *Browser) read() (*cdproto.Message, error) {
