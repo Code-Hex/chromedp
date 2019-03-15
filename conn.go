@@ -1,6 +1,7 @@
 package chromedp
 
 import (
+	"context"
 	"io"
 	"net"
 	"strings"
@@ -43,14 +44,14 @@ func (c *Conn) Write(buf []byte) error {
 }
 
 // Dial dials the specified websocket URL using gorilla/websocket.
-func Dial(urlstr string) (*Conn, error) {
+func DialContext(ctx context.Context, urlstr string) (*Conn, error) {
 	d := &websocket.Dialer{
 		ReadBufferSize:  DefaultReadBufferSize,
 		WriteBufferSize: DefaultWriteBufferSize,
 	}
 
 	// connect
-	conn, _, err := d.Dial(urlstr, nil)
+	conn, _, err := d.DialContext(ctx, urlstr, nil)
 	if err != nil {
 		return nil, err
 	}

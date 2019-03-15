@@ -32,8 +32,8 @@ type Browser struct {
 }
 
 // NewBrowser creates a new browser.
-func NewBrowser(urlstr string, opts ...BrowserOption) (*Browser, error) {
-	conn, err := Dial(ForceIP(urlstr))
+func NewBrowser(ctx context.Context, urlstr string, opts ...BrowserOption) (*Browser, error) {
+	conn, err := DialContext(ctx, ForceIP(urlstr))
 	if err != nil {
 		return nil, err
 	}

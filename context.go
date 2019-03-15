@@ -97,7 +97,7 @@ func (c *Context) newHandler(ctx context.Context) error {
 	if err := json.NewDecoder(resp.Body).Decode(&wurl); err != nil {
 		return err
 	}
-	c.handler, err = NewTargetHandler(wurl.WebsocketURL)
+	c.handler, err = NewTargetHandler(ctx, wurl.WebsocketURL)
 	if err != nil {
 		return err
 	}

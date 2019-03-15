@@ -61,8 +61,8 @@ type TargetHandler struct {
 }
 
 // NewTargetHandler creates a new handler for the specified client target.
-func NewTargetHandler(urlstr string, opts ...TargetHandlerOption) (*TargetHandler, error) {
-	conn, err := Dial(urlstr)
+func NewTargetHandler(ctx context.Context, urlstr string, opts ...TargetHandlerOption) (*TargetHandler, error) {
+	conn, err := DialContext(ctx, urlstr)
 	if err != nil {
 		return nil, err
 	}
