@@ -150,7 +150,7 @@ func (h *TargetHandler) run(ctxt context.Context) {
 		for {
 			select {
 			default:
-				msg, err := h.read()
+				msg, err := h.conn.Read()
 				if err != nil {
 					return
 				}
@@ -192,8 +192,7 @@ func (h *TargetHandler) run(ctxt context.Context) {
 			}
 
 		case cmd := <-h.qcmd:
-			err := h.processCommand(cmd)
-			if err != nil {
+			if err := h.conn.Write(cmd); err != nil {
 				h.errf("could not process command message %d: %v", cmd.ID, err)
 			}
 
@@ -201,25 +200,6 @@ func (h *TargetHandler) run(ctxt context.Context) {
 			return
 		}
 	}
-}
-
-// read reads a message from the client connection.
-func (h *TargetHandler) read() (*cdproto.Message, error) {
-	// read
-	buf, err := h.conn.Read()
-	if err != nil {
-		return nil, err
-	}
-
-	//h.debugf("-> %s", string(buf))
-
-	// unmarshal
-	msg := new(cdproto.Message)
-	if err := json.Unmarshal(buf, msg); err != nil {
-		return nil, err
-	}
-
-	return msg, nil
 }
 
 // processEvent processes an incoming event.
@@ -306,19 +286,6 @@ func (h *TargetHandler) processResult(msg *cdproto.Message) error {
 	ch <- msg
 
 	return nil
-}
-
-// processCommand writes a command to the client connection.
-func (h *TargetHandler) processCommand(cmd *cdproto.Message) error {
-	// marshal
-	buf, err := json.Marshal(cmd)
-	if err != nil {
-		return err
-	}
-
-	//h.debugf("<- %s", string(buf))
-
-	return h.conn.Write(buf)
 }
 
 // emptyObj is an empty JSON object message.

@@ -39,7 +39,7 @@ type Browser struct {
 }
 
 type cmdJob struct {
-	cmd  *cdproto.Message
+	msg  *cdproto.Message
 	resp chan *cdproto.Message
 }
 
@@ -88,11 +88,7 @@ func (b *Browser) send(method cdproto.MethodType, params easyjson.RawMessage) er
 		Method: method,
 		Params: params,
 	}
-	buf, err := msg.MarshalJSON()
-	if err != nil {
-		return err
-	}
-	return b.conn.Write(buf)
+	return b.conn.Write(msg)
 }
 
 func (b *Browser) Execute(ctx context.Context, methodType string, params json.Marshaler, res json.Unmarshaler) error {
@@ -108,7 +104,7 @@ func (b *Browser) Execute(ctx context.Context, methodType string, params json.Ma
 	ch := make(chan *cdproto.Message, 1)
 
 	b.cmdQueue <- cmdJob{
-		cmd: &cdproto.Message{
+		msg: &cdproto.Message{
 			ID:     id,
 			Method: cdproto.MethodType(methodType),
 			Params: paramsMsg,
@@ -162,7 +158,7 @@ func (b *Browser) run(ctx context.Context) {
 		for {
 			select {
 			default:
-				msg, err := b.read()
+				msg, err := b.conn.Read()
 				if err != nil {
 					return
 				}
@@ -200,14 +196,9 @@ func (b *Browser) run(ctx context.Context) {
 			delete(respByID, res.ID)
 
 		case q := <-b.cmdQueue:
-			respByID[q.cmd.ID] = q.resp
+			respByID[q.msg.ID] = q.resp
 
-			buf, err := json.Marshal(q.cmd)
-			if err != nil {
-				b.errf("%s", err)
-				break
-			}
-			if err := b.conn.Write(buf); err != nil {
+			if err := b.conn.Write(q.msg); err != nil {
 				b.errf("%s", err)
 				break
 			}
@@ -216,18 +207,6 @@ func (b *Browser) run(ctx context.Context) {
 			return
 		}
 	}
-}
-
-func (b *Browser) read() (*cdproto.Message, error) {
-	buf, err := b.conn.Read()
-	if err != nil {
-		return nil, err
-	}
-	msg := new(cdproto.Message)
-	if err := json.Unmarshal(buf, msg); err != nil {
-		return nil, err
-	}
-	return msg, nil
 }
 
 // sendToTarget writes the supplied message to the target.
