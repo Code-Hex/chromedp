@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"sync"
 	"sync/atomic"
 
 	"github.com/chromedp/cdproto"
@@ -29,12 +28,7 @@ type Browser struct {
 	// next is the next message id.
 	next int64
 
-	// TODO: rethink this without a lock
-	respByIDMu sync.RWMutex
-	respByID   map[int64]chan *cdproto.Message
-
-	// qcmd is the outgoing message queue.
-	qcmd chan *cdproto.Message
+	cmdQueue chan cmdJob
 
 	// qres is the incoming command result queue.
 	qres chan *cdproto.Message
@@ -42,6 +36,11 @@ type Browser struct {
 	// logging funcs
 	logf func(string, ...interface{})
 	errf func(string, ...interface{})
+}
+
+type cmdJob struct {
+	cmd  *cdproto.Message
+	resp chan *cdproto.Message
 }
 
 // NewBrowser creates a new browser.
@@ -106,16 +105,15 @@ func (b *Browser) Execute(ctx context.Context, methodType string, params json.Ma
 	}
 
 	id := atomic.AddInt64(&b.next, 1)
-
 	ch := make(chan *cdproto.Message, 1)
-	b.respByIDMu.Lock()
-	b.respByID[id] = ch
-	b.respByIDMu.Unlock()
 
-	b.qcmd <- &cdproto.Message{
-		ID:     id,
-		Method: cdproto.MethodType(methodType),
-		Params: paramsMsg,
+	b.cmdQueue <- cmdJob{
+		cmd: &cdproto.Message{
+			ID:     id,
+			Method: cdproto.MethodType(methodType),
+			Params: paramsMsg,
+		},
+		resp: ch,
 	}
 	errch := make(chan error, 1)
 	go func() {
@@ -137,19 +135,14 @@ func (b *Browser) Execute(ctx context.Context, methodType string, params json.Ma
 		case <-ctx.Done():
 			errch <- ctx.Err()
 		}
-
-		b.respByIDMu.Lock()
-		defer b.respByIDMu.Unlock()
-		delete(b.respByID, id)
 	}()
 
 	return <-errch
 }
 
 func (b *Browser) Start(ctx context.Context) error {
-	b.qcmd = make(chan *cdproto.Message)
+	b.cmdQueue = make(chan cmdJob)
 	b.qres = make(chan *cdproto.Message)
-	b.respByID = make(map[int64]chan *cdproto.Message)
 
 	go b.run(ctx)
 
@@ -191,49 +184,38 @@ func (b *Browser) run(ctx context.Context) {
 		}
 	}()
 
+	respByID := make(map[int64]chan *cdproto.Message)
+
 	// process queues
 	for {
 		select {
 		case res := <-b.qres:
-			err := b.processResult(res)
-			if err != nil {
-				b.errf("could not process result for message %d: %v", res.ID, err)
+			resp, ok := respByID[res.ID]
+			if !ok {
+				b.errf("id %d not present in response map", res.ID)
+				break
 			}
+			resp <- res
+			close(resp)
+			delete(respByID, res.ID)
 
-		case cmd := <-b.qcmd:
-			err := b.processCommand(cmd)
+		case q := <-b.cmdQueue:
+			respByID[q.cmd.ID] = q.resp
+
+			buf, err := json.Marshal(q.cmd)
 			if err != nil {
-				b.errf("could not process command message %d: %v", cmd.ID, err)
+				b.errf("%s", err)
+				break
+			}
+			if err := b.conn.Write(buf); err != nil {
+				b.errf("%s", err)
+				break
 			}
 
 		case <-ctx.Done():
 			return
 		}
 	}
-}
-
-// processResult processes an incoming command result.
-func (b *Browser) processResult(msg *cdproto.Message) error {
-	b.respByIDMu.RLock()
-	defer b.respByIDMu.RUnlock()
-
-	ch, ok := b.respByID[msg.ID]
-	if !ok {
-		return fmt.Errorf("id %d not present in response map", msg.ID)
-	}
-	defer close(ch)
-
-	ch <- msg
-	return nil
-}
-
-// processCommand writes a command to the client connection.
-func (b *Browser) processCommand(cmd *cdproto.Message) error {
-	buf, err := json.Marshal(cmd)
-	if err != nil {
-		return err
-	}
-	return b.conn.Write(buf)
 }
 
 func (b *Browser) read() (*cdproto.Message, error) {
