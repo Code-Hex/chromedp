@@ -113,25 +113,17 @@ func (t *Target) processEvent(ctxt context.Context, msg *cdproto.Message) error 
 	switch ev.(type) {
 	case *inspector.EventDetached:
 		return nil
-
 	case *dom.EventDocumentUpdated:
 		t.documentUpdated(ctxt)
 		return nil
 	}
 
-	d := msg.Method.Domain()
-	if d != "Page" && d != "DOM" {
-		return nil
-	}
-
-	switch d {
+	switch msg.Method.Domain() {
 	case "Page":
 		t.pageEvent(ctxt, ev)
-
 	case "DOM":
 		t.domEvent(ctxt, ev)
 	}
-
 	return nil
 }
 
@@ -208,7 +200,6 @@ func (t *Target) SetActive(ctxt context.Context, id cdp.FrameID) error {
 	defer t.Unlock()
 
 	t.cur = f
-
 	return nil
 }
 
