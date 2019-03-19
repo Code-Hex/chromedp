@@ -169,51 +169,51 @@ func (b *Browser) run(ctx context.Context) {
 
 		for {
 			select {
-			default:
-				msg, err := b.conn.Read()
-				if err != nil {
-					return
-				}
-				var sessionID target.SessionID
-				if msg.Method == cdproto.EventTargetReceivedMessageFromTarget {
-					recv := new(target.EventReceivedMessageFromTarget)
-					if err := json.Unmarshal(msg.Params, recv); err != nil {
-						b.errf("%s", err)
-						continue
-					}
-					sessionID = recv.SessionID
-					msg = new(cdproto.Message)
-					if err := json.Unmarshal([]byte(recv.Message), msg); err != nil {
-						b.errf("%s", err)
-						continue
-					}
-				}
-
-				switch {
-				case msg.Method != "":
-					if sessionID == "" {
-						// TODO: are we interested in
-						// these events?
-						continue
-					}
-
-					page, ok := b.pages[sessionID]
-					if !ok {
-						b.errf("unknown session ID %q", sessionID)
-						continue
-					}
-					// TODO: remove goroutine?
-					go page.processEvent(ctx, msg)
-
-				case msg.ID != 0:
-					b.qres <- msg
-
-				default:
-					b.errf("ignoring malformed incoming message (missing id or method): %#v", msg)
-				}
-
 			case <-ctx.Done():
 				return
+			default:
+				// continue below
+			}
+			msg, err := b.conn.Read()
+			if err != nil {
+				return
+			}
+			var sessionID target.SessionID
+			if msg.Method == cdproto.EventTargetReceivedMessageFromTarget {
+				recv := new(target.EventReceivedMessageFromTarget)
+				if err := json.Unmarshal(msg.Params, recv); err != nil {
+					b.errf("%s", err)
+					continue
+				}
+				sessionID = recv.SessionID
+				msg = new(cdproto.Message)
+				if err := json.Unmarshal([]byte(recv.Message), msg); err != nil {
+					b.errf("%s", err)
+					continue
+				}
+			}
+
+			switch {
+			case msg.Method != "":
+				if sessionID == "" {
+					// TODO: are we interested in
+					// these events?
+					continue
+				}
+
+				page, ok := b.pages[sessionID]
+				if !ok {
+					b.errf("unknown session ID %q", sessionID)
+					continue
+				}
+				// TODO: remove goroutine?
+				go page.processEvent(ctx, msg)
+
+			case msg.ID != 0:
+				b.qres <- msg
+
+			default:
+				b.errf("ignoring malformed incoming message (missing id or method): %#v", msg)
 			}
 		}
 	}()

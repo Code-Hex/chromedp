@@ -177,25 +177,25 @@ func (t *Target) GetRoot(ctxt context.Context) (*cdp.Node, error) {
 
 	for {
 		select {
-		default:
-			t.RLock()
-			cur := t.cur
-			if cur != nil {
-				cur.RLock()
-				root = cur.Root
-				cur.RUnlock()
-			}
-			t.RUnlock()
-
-			if cur != nil && root != nil {
-				return root, nil
-			}
-
-			time.Sleep(DefaultCheckDuration)
-
 		case <-ctxt.Done():
 			return nil, ctxt.Err()
+		default:
+			// continue below
 		}
+		t.RLock()
+		cur := t.cur
+		if cur != nil {
+			cur.RLock()
+			root = cur.Root
+			cur.RUnlock()
+		}
+		t.RUnlock()
+
+		if cur != nil && root != nil {
+			return root, nil
+		}
+
+		time.Sleep(DefaultCheckDuration)
 	}
 }
 
