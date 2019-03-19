@@ -34,9 +34,6 @@ type Target struct {
 	// cur is the current top level frame.
 	cur *cdp.Frame
 
-	// detached is closed when the detached event is received.
-	detached chan *inspector.EventDetached
-
 	// logging funcs
 	logf, errf func(string, ...interface{})
 
@@ -113,11 +110,8 @@ func (t *Target) processEvent(ctxt context.Context, msg *cdproto.Message) error 
 		return err
 	}
 
-	switch e := ev.(type) {
+	switch ev.(type) {
 	case *inspector.EventDetached:
-		t.Lock()
-		defer t.Unlock()
-		t.detached <- e
 		return nil
 
 	case *dom.EventDocumentUpdated:
