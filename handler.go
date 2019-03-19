@@ -415,6 +415,9 @@ func (t *Target) domEvent(ctxt context.Context, ev interface{}) {
 
 	// retrieve node
 	n, err := t.WaitNode(ctxt, f, id)
+	if err == context.Canceled {
+		return // TODO: perhaps not necessary, but useful to keep the tests less noisy
+	}
 	if err != nil {
 		s := strings.TrimSuffix(goruntime.FuncForPC(reflect.ValueOf(op).Pointer()).Name(), ".func1")
 		i := strings.LastIndex(s, ".")
