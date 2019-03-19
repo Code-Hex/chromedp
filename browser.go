@@ -136,29 +136,21 @@ func (t targetExecutor) Execute(ctx context.Context, method string, params json.
 			Params: sendParamsJSON,
 		},
 	}
-	errch := make(chan error, 1)
-	go func() {
-		defer close(errch)
 
-		select {
-		case msg := <-ch:
-			switch {
-			case msg == nil:
-				errch <- ErrChannelClosed
-
-			case msg.Error != nil:
-				errch <- msg.Error
-
-			case res != nil:
-				errch <- json.Unmarshal(msg.Result, res)
-			}
-
-		case <-ctx.Done():
-			errch <- ctx.Err()
+	select {
+	case msg := <-ch:
+		switch {
+		case msg == nil:
+			return ErrChannelClosed
+		case msg.Error != nil:
+			return msg.Error
+		case res != nil:
+			return json.Unmarshal(msg.Result, res)
 		}
-	}()
-
-	return <-errch
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return nil
 }
 
 func (b *Browser) executorForTarget(sessionID target.SessionID) targetExecutor {
@@ -179,7 +171,6 @@ func (b *Browser) Execute(ctx context.Context, method string, params json.Marsha
 
 	id := atomic.AddInt64(&b.next, 1)
 	ch := make(chan *cdproto.Message, 1)
-
 	b.cmdQueue <- cmdJob{
 		msg: &cdproto.Message{
 			ID:     id,
@@ -188,29 +179,20 @@ func (b *Browser) Execute(ctx context.Context, method string, params json.Marsha
 		},
 		resp: ch,
 	}
-	errch := make(chan error, 1)
-	go func() {
-		defer close(errch)
-
-		select {
-		case msg := <-ch:
-			switch {
-			case msg == nil:
-				errch <- ErrChannelClosed
-
-			case msg.Error != nil:
-				errch <- msg.Error
-
-			case res != nil:
-				errch <- json.Unmarshal(msg.Result, res)
-			}
-
-		case <-ctx.Done():
-			errch <- ctx.Err()
+	select {
+	case msg := <-ch:
+		switch {
+		case msg == nil:
+			return ErrChannelClosed
+		case msg.Error != nil:
+			return msg.Error
+		case res != nil:
+			return json.Unmarshal(msg.Result, res)
 		}
-	}()
-
-	return <-errch
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return nil
 }
 
 func (b *Browser) Start(ctx context.Context) error {
