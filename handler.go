@@ -34,14 +34,11 @@ type Target struct {
 	// cur is the current top level frame.
 	cur *cdp.Frame
 
-	// qcmd is the outgoing message queue.
-	qcmd chan *cdproto.Message
-
 	// detached is closed when the detached event is received.
 	detached chan *inspector.EventDetached
 
 	// logging funcs
-	logf, debugf, errf func(string, ...interface{})
+	logf, errf func(string, ...interface{})
 
 	sync.RWMutex
 }

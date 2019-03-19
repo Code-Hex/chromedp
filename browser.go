@@ -150,13 +150,11 @@ func (b *Browser) Execute(ctx context.Context, method string, params json.Marsha
 	return nil
 }
 
-func (b *Browser) Start(ctx context.Context) error {
+func (b *Browser) Start(ctx context.Context) {
 	b.cmdQueue = make(chan cmdJob)
 	b.qres = make(chan *cdproto.Message)
 
 	go b.run(ctx)
-
-	return nil
 }
 
 func (b *Browser) run(ctx context.Context) {

@@ -26,9 +26,6 @@ type Context struct {
 	browser *Browser
 
 	sessionID target.SessionID
-
-	logf func(string, ...interface{})
-	errf func(string, ...interface{})
 }
 
 // Wait can be called after cancelling the context containing Context, to block
@@ -124,10 +121,6 @@ func (c *Context) newSession(ctx context.Context) error {
 
 	c.sessionID = sessionID
 	return nil
-}
-
-type withWebsocketURL struct {
-	WebsocketURL string `json:"webSocketDebuggerUrl"`
 }
 
 // ContextOption
