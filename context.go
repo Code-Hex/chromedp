@@ -3,7 +3,14 @@ package chromedp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
+	"github.com/chromedp/cdproto/css"
+	"github.com/chromedp/cdproto/dom"
+	"github.com/chromedp/cdproto/inspector"
+	"github.com/chromedp/cdproto/log"
+	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
 )
 
@@ -97,6 +104,24 @@ func (c *Context) newSession(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	target := c.browser.executorForTarget(sessionID)
+
+	// enable domains
+	for _, enable := range []Action{
+		log.Enable(),
+		runtime.Enable(),
+		//network.Enable(),
+		inspector.Enable(),
+		page.Enable(),
+		dom.Enable(),
+		css.Enable(),
+	} {
+		if err := enable.Do(ctx, target); err != nil {
+			return fmt.Errorf("unable to execute %T: %v", enable, err)
+		}
+	}
+
 	c.sessionID = sessionID
 	return nil
 }
