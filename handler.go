@@ -124,7 +124,7 @@ func (t *Target) processEvent(ctxt context.Context, msg *cdproto.Message) error 
 		return nil
 
 	case *dom.EventDocumentUpdated:
-		go t.documentUpdated(ctxt)
+		t.documentUpdated(ctxt)
 		return nil
 	}
 
