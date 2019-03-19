@@ -380,8 +380,8 @@ func NodeSelected(s *Selector) {
 	}))(s)
 }
 
-// NodeNotPresent is a query option to wait until no elements match are
-// present matching the selector.
+// NodeNotPresent is a query option to wait until no elements are present
+// matching the selector.
 func NodeNotPresent(s *Selector) {
 	s.exp = 0
 	WaitFunc(func(ctxt context.Context, h *Target, n *cdp.Node, ids ...cdp.NodeID) ([]*cdp.Node, error) {
