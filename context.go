@@ -3,7 +3,6 @@ package chromedp
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
 	"github.com/chromedp/cdproto/target"
 )
@@ -18,7 +17,8 @@ type Context struct {
 	Allocator Allocator
 
 	browser *Browser
-	handler *TargetHandler
+
+	sessionID target.SessionID
 
 	logf func(string, ...interface{})
 	errf func(string, ...interface{})
@@ -77,33 +77,27 @@ func Run(ctx context.Context, action Action) error {
 		}
 		c.browser = browser
 	}
-	if c.handler == nil {
-		if err := c.newHandler(ctx); err != nil {
+	if c.sessionID == "" {
+		if err := c.newSession(ctx); err != nil {
 			return err
 		}
 	}
-	return action.Do(ctx, c.handler)
+	return action.Do(ctx, c.browser.executorForTarget(c.sessionID))
 }
 
-func (c *Context) newHandler(ctx context.Context) error {
-	params := target.CreateTarget("about:blank")
-	targetID, err := params.Do(ctx, c.browser)
+func (c *Context) newSession(ctx context.Context) error {
+	create := target.CreateTarget("about:blank")
+	targetID, err := create.Do(ctx, c.browser)
 	if err != nil {
 		return err
 	}
 
-	// TODO: use sendMessageToTarget instead
-	conn := c.browser.conn.(*Conn).Conn
-	addr := conn.RemoteAddr()
-	wurl := fmt.Sprintf("ws://%s/devtools/page/%s", addr, targetID)
-
-	c.handler, err = NewTargetHandler(ctx, wurl)
+	attach := target.AttachToTarget(targetID)
+	sessionID, err := attach.Do(ctx, c.browser)
 	if err != nil {
 		return err
 	}
-	if err := c.handler.Run(ctx); err != nil {
-		return err
-	}
+	c.sessionID = sessionID
 	return nil
 }
 

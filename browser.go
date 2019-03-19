@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 
 	"github.com/chromedp/cdproto"
+	"github.com/chromedp/cdproto/target"
 	"github.com/mailru/easyjson"
 )
 
@@ -91,7 +92,83 @@ func (b *Browser) send(method cdproto.MethodType, params easyjson.RawMessage) er
 	return b.conn.Write(msg)
 }
 
-func (b *Browser) Execute(ctx context.Context, methodType string, params json.Marshaler, res json.Unmarshaler) error {
+type targetExecutor struct {
+	browser   *Browser
+	sessionID target.SessionID
+}
+
+func (t targetExecutor) Execute(ctx context.Context, method string, params json.Marshaler, res json.Unmarshaler) error {
+	paramsMsg := emptyObj
+	if params != nil {
+		var err error
+		if paramsMsg, err = json.Marshal(params); err != nil {
+			return err
+		}
+	}
+	innerID := atomic.AddInt64(&t.browser.next, 1)
+	msg := &cdproto.Message{
+		ID:     innerID,
+		Method: cdproto.MethodType(method),
+		Params: paramsMsg,
+	}
+	msgJSON, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	sendParams := target.SendMessageToTarget(string(msgJSON)).
+		WithSessionID(t.sessionID)
+	sendParamsJSON, _ := json.Marshal(sendParams)
+
+	// We want to grab the response from the inner message.
+	ch := make(chan *cdproto.Message, 1)
+	t.browser.cmdQueue <- cmdJob{
+		msg:  &cdproto.Message{ID: innerID},
+		resp: ch,
+	}
+
+	// The response from the outer message is uninteresting; pass a nil
+	// resp channel.
+	outerID := atomic.AddInt64(&t.browser.next, 1)
+	t.browser.cmdQueue <- cmdJob{
+		msg: &cdproto.Message{
+			ID:     outerID,
+			Method: target.CommandSendMessageToTarget,
+			Params: sendParamsJSON,
+		},
+	}
+	errch := make(chan error, 1)
+	go func() {
+		defer close(errch)
+
+		select {
+		case msg := <-ch:
+			switch {
+			case msg == nil:
+				errch <- ErrChannelClosed
+
+			case msg.Error != nil:
+				errch <- msg.Error
+
+			case res != nil:
+				errch <- json.Unmarshal(msg.Result, res)
+			}
+
+		case <-ctx.Done():
+			errch <- ctx.Err()
+		}
+	}()
+
+	return <-errch
+}
+
+func (b *Browser) executorForTarget(sessionID target.SessionID) targetExecutor {
+	return targetExecutor{
+		browser:   b,
+		sessionID: sessionID,
+	}
+}
+
+func (b *Browser) Execute(ctx context.Context, method string, params json.Marshaler, res json.Unmarshaler) error {
 	paramsMsg := emptyObj
 	if params != nil {
 		var err error
@@ -106,7 +183,7 @@ func (b *Browser) Execute(ctx context.Context, methodType string, params json.Ma
 	b.cmdQueue <- cmdJob{
 		msg: &cdproto.Message{
 			ID:     id,
-			Method: cdproto.MethodType(methodType),
+			Method: cdproto.MethodType(method),
 			Params: paramsMsg,
 		},
 		resp: ch,
@@ -162,10 +239,26 @@ func (b *Browser) run(ctx context.Context) {
 				if err != nil {
 					return
 				}
+				if msg.Method == cdproto.EventTargetReceivedMessageFromTarget {
+					recv := new(target.EventReceivedMessageFromTarget)
+					if err := json.Unmarshal(msg.Params, recv); err != nil {
+						b.errf("%s", err)
+						break
+					}
+					msg = new(cdproto.Message)
+					if err := json.Unmarshal([]byte(recv.Message), msg); err != nil {
+						b.errf("%s", err)
+						break
+					}
+				}
 
 				switch {
 				case msg.Method != "":
-					fmt.Printf("method: %+v\n", msg)
+					switch msg.Method {
+					case cdproto.EventTargetAttachedToTarget:
+					default:
+						fmt.Printf("event: %+v\n", msg)
+					}
 
 				case msg.ID != 0:
 					b.qres <- msg
@@ -191,13 +284,26 @@ func (b *Browser) run(ctx context.Context) {
 				b.errf("id %d not present in response map", res.ID)
 				break
 			}
-			resp <- res
-			close(resp)
+			if resp != nil {
+				// resp could be nil, if we're not interested in
+				// this response; for CommandSendMessageToTarget.
+				resp <- res
+				close(resp)
+			}
 			delete(respByID, res.ID)
 
 		case q := <-b.cmdQueue:
+			if _, ok := respByID[q.msg.ID]; ok {
+				b.errf("id %d already present in response map", q.msg.ID)
+				break
+			}
 			respByID[q.msg.ID] = q.resp
 
+			if q.msg.Method == "" {
+				// Only register the chananel in respByID;
+				// useful for CommandSendMessageToTarget.
+				break
+			}
 			if err := b.conn.Write(q.msg); err != nil {
 				b.errf("%s", err)
 				break
@@ -207,16 +313,6 @@ func (b *Browser) run(ctx context.Context) {
 			return
 		}
 	}
-}
-
-// sendToTarget writes the supplied message to the target.
-func (b *Browser) sendToTarget(targetID string, method cdproto.MethodType, params easyjson.RawMessage) error {
-	return nil
-}
-
-// CreateContext creates a new browser context.
-func (b *Browser) CreateContext() (context.Context, error) {
-	return nil, nil
 }
 
 // BrowserOption is a browser option.
