@@ -145,6 +145,9 @@ func (t *Target) processEvent(ctxt context.Context, msg *cdproto.Message) error 
 // root for the root frame.
 func (t *Target) documentUpdated(ctxt context.Context) {
 	f, err := t.WaitFrame(ctxt, cdp.EmptyFrameID)
+	if err == context.Canceled {
+		return // TODO: perhaps not necessary, but useful to keep the tests less noisy
+	}
 	if err != nil {
 		t.errf("could not get current frame: %v", err)
 		return
@@ -325,6 +328,9 @@ func (t *Target) pageEvent(ctxt context.Context, ev interface{}) {
 	}
 
 	f, err := t.WaitFrame(ctxt, id)
+	if err == context.Canceled {
+		return // TODO: perhaps not necessary, but useful to keep the tests less noisy
+	}
 	if err != nil {
 		t.errf("could not get frame %s: %v", id, err)
 		return
