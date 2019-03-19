@@ -176,12 +176,14 @@ func (b *Browser) run(ctx context.Context) {
 				if err != nil {
 					return
 				}
+				var sessionID target.SessionID
 				if msg.Method == cdproto.EventTargetReceivedMessageFromTarget {
 					recv := new(target.EventReceivedMessageFromTarget)
 					if err := json.Unmarshal(msg.Params, recv); err != nil {
 						b.errf("%s", err)
 						continue
 					}
+					sessionID = recv.SessionID
 					msg = new(cdproto.Message)
 					if err := json.Unmarshal([]byte(recv.Message), msg); err != nil {
 						b.errf("%s", err)
@@ -191,11 +193,19 @@ func (b *Browser) run(ctx context.Context) {
 
 				switch {
 				case msg.Method != "":
-					// TODO: only send to the right page
-					for _, page := range b.pages {
-						// TODO: remove goroutine?
-						go page.processEvent(ctx, msg)
+					if sessionID == "" {
+						// TODO: are we interested in
+						// these events?
+						continue
 					}
+
+					page, ok := b.pages[sessionID]
+					if !ok {
+						b.errf("unknown session ID %q", sessionID)
+						continue
+					}
+					// TODO: remove goroutine?
+					go page.processEvent(ctx, msg)
 
 				case msg.ID != 0:
 					b.qres <- msg
