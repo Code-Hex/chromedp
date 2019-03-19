@@ -55,7 +55,7 @@ func NewBrowser(ctx context.Context, urlstr string, opts ...BrowserOption) (*Bro
 
 	b := &Browser{
 		conn:  conn,
-		pages: make(map[target.SessionID]*Target),
+		pages: make(map[target.SessionID]*Target, 1024),
 		logf:  log.Printf,
 	}
 
@@ -95,7 +95,7 @@ func (b *Browser) send(method cdproto.MethodType, params easyjson.RawMessage) er
 	return b.conn.Write(msg)
 }
 
-func (b *Browser) executorForTarget(sessionID target.SessionID) *Target {
+func (b *Browser) executorForTarget(ctx context.Context, sessionID target.SessionID) *Target {
 	if sessionID == "" {
 		panic("empty session ID")
 	}
@@ -106,11 +106,13 @@ func (b *Browser) executorForTarget(sessionID target.SessionID) *Target {
 		browser:   b,
 		sessionID: sessionID,
 
-		frames: make(map[cdp.FrameID]*cdp.Frame),
+		eventQueue: make(chan *cdproto.Message, 1024),
+		frames:     make(map[cdp.FrameID]*cdp.Frame),
 
 		logf: b.logf,
 		errf: b.errf,
 	}
+	go t.run(ctx)
 	b.pages[sessionID] = t
 	return t
 }
@@ -206,8 +208,11 @@ func (b *Browser) run(ctx context.Context) {
 					b.errf("unknown session ID %q", sessionID)
 					continue
 				}
-				// TODO: remove goroutine?
-				go page.processEvent(ctx, msg)
+				select {
+				case page.eventQueue <- msg:
+				default:
+					panic("eventQueue is full")
+				}
 
 			case msg.ID != 0:
 				b.qres <- msg

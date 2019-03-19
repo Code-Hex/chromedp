@@ -4,9 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"reflect"
-	goruntime "runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,6 +23,8 @@ type Target struct {
 	browser   *Browser
 	sessionID target.SessionID
 
+	eventQueue chan *cdproto.Message
+
 	// below are the old TargetHandler fields.
 
 	// frames is the set of encountered frames.
@@ -38,6 +37,23 @@ type Target struct {
 	logf, errf func(string, ...interface{})
 
 	sync.RWMutex
+}
+
+func (t *Target) run(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			// continue below
+		}
+		msg := <-t.eventQueue
+		//fmt.Printf("%d %s: %s\n", msg.ID, msg.Method, msg.Params)
+		if err := t.processEvent(ctx, msg); err != nil {
+			t.errf("could not process event: %v", err)
+			continue
+		}
+	}
 }
 
 func (t *Target) Execute(ctx context.Context, method string, params json.Marshaler, res json.Unmarshaler) error {
@@ -149,6 +165,9 @@ func (t *Target) documentUpdated(ctxt context.Context) {
 
 	f.Nodes = make(map[cdp.NodeID]*cdp.Node)
 	f.Root, err = dom.GetDocument().WithPierce(true).Do(ctxt, t)
+	if err == context.Canceled {
+		return // TODO: perhaps not necessary, but useful to keep the tests less noisy
+	}
 	if err != nil {
 		t.errf("could not retrieve document root for %s: %v", f.ID, err)
 		return
@@ -286,7 +305,10 @@ func (t *Target) pageEvent(ctxt context.Context, ev interface{}) {
 		id, op = e.FrameID, frameDetached
 
 	case *page.EventFrameStartedLoading:
-		id, op = e.FrameID, frameStartedLoading
+		// TODO: this happens before EventFrameNavigated, so the frame
+		// isn't in t.frames yet.
+		//id, op = e.FrameID, frameStartedLoading
+		return
 
 	case *page.EventFrameStoppedLoading:
 		id, op = e.FrameID, frameStoppedLoading
@@ -312,14 +334,7 @@ func (t *Target) pageEvent(ctxt context.Context, ev interface{}) {
 		return
 	}
 
-	f, err := t.WaitFrame(ctxt, id)
-	if err == context.Canceled {
-		return // TODO: perhaps not necessary, but useful to keep the tests less noisy
-	}
-	if err != nil {
-		t.errf("could not get frame %s: %v", id, err)
-		return
-	}
+	f := t.frames[id]
 
 	t.Lock()
 	defer t.Unlock()
@@ -366,12 +381,6 @@ func (t *Target) domEvent(ctxt context.Context, ev interface{}) {
 		id, op = e.NodeID, childNodeCountUpdated(e.ChildNodeCount)
 
 	case *dom.EventChildNodeInserted:
-		if e.PreviousNodeID != cdp.EmptyNodeID {
-			_, err = t.WaitNode(ctxt, f, e.PreviousNodeID)
-			if err != nil {
-				return
-			}
-		}
 		id, op = e.ParentNodeID, childNodeInserted(f.Nodes, e.PreviousNodeID, e.Node)
 
 	case *dom.EventChildNodeRemoved:
@@ -397,18 +406,9 @@ func (t *Target) domEvent(ctxt context.Context, ev interface{}) {
 		return
 	}
 
-	// retrieve node
-	n, err := t.WaitNode(ctxt, f, id)
-	if err == context.Canceled {
-		return // TODO: perhaps not necessary, but useful to keep the tests less noisy
-	}
-	if err != nil {
-		s := strings.TrimSuffix(goruntime.FuncForPC(reflect.ValueOf(op).Pointer()).Name(), ".func1")
-		i := strings.LastIndex(s, ".")
-		if i != -1 {
-			s = s[i+1:]
-		}
-		t.errf("could not perform (%s) operation on node %d (wait node): %v", s, id, err)
+	n, ok := f.Nodes[id]
+	if !ok {
+		// Node ID has been invalidated. Nothing to do.
 		return
 	}
 

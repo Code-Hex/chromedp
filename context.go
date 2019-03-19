@@ -86,7 +86,7 @@ func Run(ctx context.Context, action Action) error {
 			return err
 		}
 	}
-	return action.Do(ctx, c.browser.executorForTarget(c.sessionID))
+	return action.Do(ctx, c.browser.executorForTarget(ctx, c.sessionID))
 }
 
 func (c *Context) newSession(ctx context.Context) error {
@@ -102,7 +102,7 @@ func (c *Context) newSession(ctx context.Context) error {
 		return err
 	}
 
-	target := c.browser.executorForTarget(sessionID)
+	target := c.browser.executorForTarget(ctx, sessionID)
 
 	// enable domains
 	for _, enable := range []Action{
