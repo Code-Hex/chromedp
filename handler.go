@@ -327,7 +327,7 @@ func (t *Target) pageEvent(ctxt context.Context, ev interface{}) {
 		return
 
 	default:
-		t.errf("unhandled page event %s", reflect.TypeOf(ev))
+		t.errf("unhandled page event %T", ev)
 		return
 	}
 
@@ -351,7 +351,7 @@ func (t *Target) domEvent(ctxt context.Context, ev interface{}) {
 	// wait current frame
 	f, err := t.WaitFrame(ctxt, cdp.EmptyFrameID)
 	if err != nil {
-		t.errf("could not process DOM event %s: %v", reflect.TypeOf(ev), err)
+		t.errf("could not process DOM event %T: %v", ev, err)
 		return
 	}
 
@@ -409,7 +409,7 @@ func (t *Target) domEvent(ctxt context.Context, ev interface{}) {
 		id, op = e.InsertionPointID, distributedNodesUpdated(e.DistributedNodes)
 
 	default:
-		t.errf("unhandled node event %s", reflect.TypeOf(ev))
+		t.errf("unhandled node event %T", ev)
 		return
 	}
 
