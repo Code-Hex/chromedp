@@ -179,11 +179,10 @@ func (t *Target) GetRoot(ctxt context.Context) (*cdp.Node, error) {
 	var root *cdp.Node
 
 	for {
-		var cur *cdp.Frame
 		select {
 		default:
 			t.RLock()
-			cur = t.cur
+			cur := t.cur
 			if cur != nil {
 				cur.RLock()
 				root = cur.Root
@@ -261,11 +260,8 @@ func (t *Target) WaitNode(ctxt context.Context, f *cdp.Frame, id cdp.NodeID) (*c
 	for {
 		select {
 		default:
-			var n *cdp.Node
-			var ok bool
-
 			f.RLock()
-			n, ok = f.Nodes[id]
+			n, ok := f.Nodes[id]
 			f.RUnlock()
 
 			if n != nil && ok {
