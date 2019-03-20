@@ -63,7 +63,7 @@ func (s *Selector) Do(ctxt context.Context, h cdp.Executor) error {
 	}
 
 	// TODO: fix this
-	ctxt, cancel := context.WithTimeout(ctxt, 100*time.Second)
+	ctxt, cancel := context.WithTimeout(ctxt, 2*time.Second)
 	defer cancel()
 
 	var err error
@@ -81,52 +81,27 @@ func (s *Selector) Do(ctxt context.Context, h cdp.Executor) error {
 // funcs.
 func (s *Selector) run(ctxt context.Context, h *Target) chan error {
 	ch := make(chan error, 1)
+	h.waitQueue <- func(cur *cdp.Frame) bool {
+		cur.RLock()
+		root := cur.Root
+		cur.RUnlock()
 
-	go func() {
-		defer close(ch)
-
-		for {
-			h.curMu.RLock()
-			cur := h.cur
-			h.curMu.RUnlock()
-			if cur == nil {
-				// TODO: don't poll
-				time.Sleep(DefaultCheckDuration)
-				continue
-			}
-			cur.RLock()
-			root := cur.Root
-			cur.RUnlock()
-
-			select {
-			default:
-				ids, err := s.by(ctxt, h, root)
-				if err == nil && len(ids) >= s.exp {
-					nodes, err := s.wait(ctxt, h, root, ids...)
-					if err == nil {
-						if s.after == nil {
-							return
-						}
-
-						if err := s.after(ctxt, h, nodes...); err != nil {
-							ch <- err
-						}
-						return
-					}
-				}
-
-				time.Sleep(DefaultCheckDuration)
-
-			case <-root.Invalidated:
-				continue
-
-			case <-ctxt.Done():
-				ch <- ctxt.Err()
-				return
+		ids, err := s.by(ctxt, h, root)
+		if err != nil || len(ids) < s.exp {
+			return false
+		}
+		nodes, err := s.wait(ctxt, h, root, ids...)
+		if err != nil {
+			return false
+		}
+		if s.after != nil {
+			if err := s.after(ctxt, h, nodes...); err != nil {
+				ch <- err
 			}
 		}
-	}()
-
+		close(ch)
+		return true
+	}
 	return ch
 }
 
@@ -170,6 +145,11 @@ func ByFunc(f func(context.Context, *Target, *cdp.Node) ([]cdp.NodeID, error)) Q
 // DOM.querySelector.
 func ByQuery(s *Selector) {
 	ByFunc(func(ctxt context.Context, h *Target, n *cdp.Node) ([]cdp.NodeID, error) {
+		if n == nil {
+			// TODO: what
+			println("here?")
+			return nil, nil
+		}
 		nodeID, err := dom.QuerySelector(n.NodeID, s.selAsString()).Do(ctxt, h)
 		if err != nil {
 			return nil, err
@@ -240,27 +220,24 @@ func ByNodeID(s *Selector) {
 // waitReady waits for the specified nodes to be ready.
 func (s *Selector) waitReady(check func(context.Context, *Target, *cdp.Node) error) func(context.Context, *Target, *cdp.Node, ...cdp.NodeID) ([]*cdp.Node, error) {
 	return func(ctxt context.Context, h *Target, n *cdp.Node, ids ...cdp.NodeID) ([]*cdp.Node, error) {
-		h.curMu.RLock()
-		f := h.cur
-		h.curMu.RUnlock()
-		if f == nil {
-			panic("TODO")
-		}
+		ch := make(chan []*cdp.Node, 1)
+		h.waitQueue <- func(cur *cdp.Frame) bool {
+			nodes := make([]*cdp.Node, len(ids))
 
-		nodes := make([]*cdp.Node, len(ids))
-
-	waitNodes:
-		f.RLock()
-		for i, id := range ids {
-			nodes[i] = f.Nodes[id]
-			if nodes[i] == nil {
-				// TODO: don't poll
-				f.RUnlock()
-				time.Sleep(100 * time.Millisecond)
-				goto waitNodes
+			cur.RLock()
+			for i, id := range ids {
+				nodes[i] = cur.Nodes[id]
+				if nodes[i] == nil {
+					cur.RUnlock()
+					return false
+				}
 			}
+			cur.RUnlock()
+			ch <- nodes
+			close(ch)
+			return true
 		}
-		f.RUnlock()
+		nodes := <- ch
 
 		if check != nil {
 			var wg sync.WaitGroup

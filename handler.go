@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/mailru/easyjson"
 
@@ -21,6 +22,7 @@ type Target struct {
 	browser   *Browser
 	sessionID target.SessionID
 
+	waitQueue  chan func(cur *cdp.Frame) bool
 	eventQueue chan *cdproto.Message
 
 	// below are the old TargetHandler fields.
@@ -41,14 +43,41 @@ func (t *Target) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case msg := <-t.eventQueue:
+			//fmt.Printf("%d %s: %s\n", msg.ID, msg.Method, msg.Params)
+			if err := t.processEvent(ctx, msg); err != nil {
+				t.errf("could not process event: %v", err)
+				continue
+			}
 		default:
-			// continue below
-		}
-		msg := <-t.eventQueue
-		//fmt.Printf("%d %s: %s\n", msg.ID, msg.Method, msg.Params)
-		if err := t.processEvent(ctx, msg); err != nil {
-			t.errf("could not process event: %v", err)
-			continue
+			// prevent busy spinning. TODO: do better
+			time.Sleep(5 * time.Millisecond)
+			n := len(t.waitQueue)
+			if n == 0 {
+				continue
+			}
+
+			t.curMu.RLock()
+			cur := t.cur
+			t.curMu.RUnlock()
+			if cur == nil {
+				continue
+			}
+
+			var wg sync.WaitGroup
+			// Fire all these concurrently, since some waits depend
+			// on other waits.
+			for i := 0; i < n; i++ {
+				wg.Add(1)
+				go func() {
+					fn := <-t.waitQueue
+					if !fn(cur) {
+						// try again later.
+						t.waitQueue <- fn
+					}
+				}()
+			}
+			wg.Done()
 		}
 	}
 }

@@ -107,6 +107,7 @@ func (b *Browser) executorForTarget(ctx context.Context, sessionID target.Sessio
 		sessionID: sessionID,
 
 		eventQueue: make(chan *cdproto.Message, 1024),
+		waitQueue:  make(chan func(cur *cdp.Frame) bool, 1024),
 		frames:     make(map[cdp.FrameID]*cdp.Frame),
 
 		logf: b.logf,
