@@ -148,9 +148,9 @@ func (t *Target) processEvent(ctxt context.Context, msg *cdproto.Message) error 
 
 	switch msg.Method.Domain() {
 	case "Page":
-		t.pageEvent(ctxt, ev)
+		t.pageEvent(ev)
 	case "DOM":
-		t.domEvent(ctxt, ev)
+		t.domEvent(ev)
 	}
 	return nil
 }
@@ -185,7 +185,7 @@ func (t *Target) documentUpdated(ctxt context.Context) {
 var emptyObj = easyjson.RawMessage([]byte(`{}`))
 
 // pageEvent handles incoming page events.
-func (t *Target) pageEvent(ctxt context.Context, ev interface{}) {
+func (t *Target) pageEvent(ev interface{}) {
 	var id cdp.FrameID
 	var op frameOp
 
@@ -240,7 +240,7 @@ func (t *Target) pageEvent(ctxt context.Context, ev interface{}) {
 }
 
 // domEvent handles incoming DOM events.
-func (t *Target) domEvent(ctxt context.Context, ev interface{}) {
+func (t *Target) domEvent(ev interface{}) {
 	f := t.cur
 
 	var id cdp.NodeID
