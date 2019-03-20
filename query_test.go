@@ -893,7 +893,6 @@ func TestMatchedStyle(t *testing.T) {
 }
 
 func TestFileUpload(t *testing.T) {
-	t.Skip("TODO: investigate why it hangs after the refactor")
 	t.Parallel()
 
 	// create test server
