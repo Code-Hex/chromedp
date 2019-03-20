@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
@@ -27,7 +26,7 @@ type Selector struct {
 	sel   interface{}
 	exp   int
 	by    func(context.Context, *Target, *cdp.Node) ([]cdp.NodeID, error)
-	wait  func(context.Context, *Target, *cdp.Node, ...cdp.NodeID) ([]*cdp.Node, error)
+	wait  func(context.Context, *Target, *cdp.Frame, ...cdp.NodeID) ([]*cdp.Node, error)
 	after func(context.Context, *Target, ...*cdp.Node) error
 }
 
@@ -62,10 +61,6 @@ func (s *Selector) Do(ctxt context.Context, h cdp.Executor) error {
 		return ErrInvalidHandler
 	}
 
-	// TODO: fix this
-	ctxt, cancel := context.WithTimeout(ctxt, 2*time.Second)
-	defer cancel()
-
 	var err error
 	select {
 	case err = <-s.run(ctxt, th):
@@ -86,12 +81,18 @@ func (s *Selector) run(ctxt context.Context, h *Target) chan error {
 		root := cur.Root
 		cur.RUnlock()
 
+		if root == nil {
+			// not ready?
+			return false
+		}
+
 		ids, err := s.by(ctxt, h, root)
 		if err != nil || len(ids) < s.exp {
 			return false
 		}
-		nodes, err := s.wait(ctxt, h, root, ids...)
-		if err != nil {
+		nodes, err := s.wait(ctxt, h, cur, ids...)
+		// if nodes==nil, we're not yet ready
+		if nodes == nil || err != nil {
 			return false
 		}
 		if s.after != nil {
@@ -145,11 +146,6 @@ func ByFunc(f func(context.Context, *Target, *cdp.Node) ([]cdp.NodeID, error)) Q
 // DOM.querySelector.
 func ByQuery(s *Selector) {
 	ByFunc(func(ctxt context.Context, h *Target, n *cdp.Node) ([]cdp.NodeID, error) {
-		if n == nil {
-			// TODO: what
-			println("here?")
-			return nil, nil
-		}
 		nodeID, err := dom.QuerySelector(n.NodeID, s.selAsString()).Do(ctxt, h)
 		if err != nil {
 			return nil, err
@@ -218,26 +214,19 @@ func ByNodeID(s *Selector) {
 }
 
 // waitReady waits for the specified nodes to be ready.
-func (s *Selector) waitReady(check func(context.Context, *Target, *cdp.Node) error) func(context.Context, *Target, *cdp.Node, ...cdp.NodeID) ([]*cdp.Node, error) {
-	return func(ctxt context.Context, h *Target, n *cdp.Node, ids ...cdp.NodeID) ([]*cdp.Node, error) {
-		ch := make(chan []*cdp.Node, 1)
-		h.waitQueue <- func(cur *cdp.Frame) bool {
-			nodes := make([]*cdp.Node, len(ids))
-
-			cur.RLock()
-			for i, id := range ids {
-				nodes[i] = cur.Nodes[id]
-				if nodes[i] == nil {
-					cur.RUnlock()
-					return false
-				}
+func (s *Selector) waitReady(check func(context.Context, *Target, *cdp.Node) error) func(context.Context, *Target, *cdp.Frame, ...cdp.NodeID) ([]*cdp.Node, error) {
+	return func(ctxt context.Context, h *Target, cur *cdp.Frame, ids ...cdp.NodeID) ([]*cdp.Node, error) {
+		nodes := make([]*cdp.Node, len(ids))
+		cur.RLock()
+		for i, id := range ids {
+			nodes[i] = cur.Nodes[id]
+			if nodes[i] == nil {
+				cur.RUnlock()
+				// not yet ready
+				return nil, nil
 			}
-			cur.RUnlock()
-			ch <- nodes
-			close(ch)
-			return true
 		}
-		nodes := <- ch
+		cur.RUnlock()
 
 		if check != nil {
 			var wg sync.WaitGroup
@@ -263,7 +252,7 @@ func (s *Selector) waitReady(check func(context.Context, *Target, *cdp.Node) err
 }
 
 // WaitFunc is a query option to set a custom wait func.
-func WaitFunc(wait func(context.Context, *Target, *cdp.Node, ...cdp.NodeID) ([]*cdp.Node, error)) QueryOption {
+func WaitFunc(wait func(context.Context, *Target, *cdp.Frame, ...cdp.NodeID) ([]*cdp.Node, error)) QueryOption {
 	return func(s *Selector) {
 		s.wait = wait
 	}
@@ -362,7 +351,7 @@ func NodeSelected(s *Selector) {
 // matching the selector.
 func NodeNotPresent(s *Selector) {
 	s.exp = 0
-	WaitFunc(func(ctxt context.Context, h *Target, n *cdp.Node, ids ...cdp.NodeID) ([]*cdp.Node, error) {
+	WaitFunc(func(ctxt context.Context, h *Target, cur *cdp.Frame, ids ...cdp.NodeID) ([]*cdp.Node, error) {
 		if len(ids) != 0 {
 			return nil, ErrHasResults
 		}

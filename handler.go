@@ -64,20 +64,13 @@ func (t *Target) run(ctx context.Context) {
 				continue
 			}
 
-			var wg sync.WaitGroup
-			// Fire all these concurrently, since some waits depend
-			// on other waits.
 			for i := 0; i < n; i++ {
-				wg.Add(1)
-				go func() {
-					fn := <-t.waitQueue
-					if !fn(cur) {
-						// try again later.
-						t.waitQueue <- fn
-					}
-				}()
+				fn := <-t.waitQueue
+				if !fn(cur) {
+					// try again later.
+					t.waitQueue <- fn
+				}
 			}
-			wg.Done()
 		}
 	}
 }
