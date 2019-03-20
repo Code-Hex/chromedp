@@ -86,16 +86,17 @@ func (s *Selector) run(ctxt context.Context, h *Target) chan error {
 		defer close(ch)
 
 		for {
-			root, err := h.GetRoot(ctxt)
-			if err != nil {
-				select {
-				case <-ctxt.Done():
-					ch <- ctxt.Err()
-					return
-				default:
-					continue
-				}
+			h.curMu.RLock()
+			cur := h.cur
+			h.curMu.RUnlock()
+			if cur == nil {
+				// TODO: don't poll
+				time.Sleep(DefaultCheckDuration)
+				continue
 			}
+			cur.RLock()
+			root := cur.Root
+			cur.RUnlock()
 
 			select {
 			default:
@@ -239,30 +240,30 @@ func ByNodeID(s *Selector) {
 // waitReady waits for the specified nodes to be ready.
 func (s *Selector) waitReady(check func(context.Context, *Target, *cdp.Node) error) func(context.Context, *Target, *cdp.Node, ...cdp.NodeID) ([]*cdp.Node, error) {
 	return func(ctxt context.Context, h *Target, n *cdp.Node, ids ...cdp.NodeID) ([]*cdp.Node, error) {
-		f, err := h.WaitFrame(ctxt, cdp.EmptyFrameID)
-		if err != nil {
-			return nil, err
+		h.curMu.RLock()
+		f := h.cur
+		h.curMu.RUnlock()
+		if f == nil {
+			panic("TODO")
 		}
 
-		wg := new(sync.WaitGroup)
 		nodes := make([]*cdp.Node, len(ids))
-		errs := make([]error, len(ids))
-		for i, id := range ids {
-			wg.Add(1)
-			go func(i int, id cdp.NodeID) {
-				defer wg.Done()
-				nodes[i], errs[i] = h.WaitNode(ctxt, f, id)
-			}(i, id)
-		}
-		wg.Wait()
 
-		for _, err := range errs {
-			if err != nil {
-				return nil, err
+	waitNodes:
+		f.RLock()
+		for i, id := range ids {
+			nodes[i] = f.Nodes[id]
+			if nodes[i] == nil {
+				// TODO: don't poll
+				f.RUnlock()
+				time.Sleep(100 * time.Millisecond)
+				goto waitNodes
 			}
 		}
+		f.RUnlock()
 
 		if check != nil {
+			var wg sync.WaitGroup
 			errs := make([]error, len(nodes))
 			for i, n := range nodes {
 				wg.Add(1)

@@ -3,10 +3,8 @@ package chromedp
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/mailru/easyjson"
 
@@ -30,13 +28,12 @@ type Target struct {
 	// frames is the set of encountered frames.
 	frames map[cdp.FrameID]*cdp.Frame
 
-	// cur is the current top level frame.
-	cur *cdp.Frame
+	// cur is the current top level frame. TODO: delete mutex
+	curMu sync.RWMutex
+	cur   *cdp.Frame
 
 	// logging funcs
 	logf, errf func(string, ...interface{})
-
-	sync.RWMutex
 }
 
 func (t *Target) run(ctx context.Context) {
@@ -146,15 +143,9 @@ func (t *Target) processEvent(ctxt context.Context, msg *cdproto.Message) error 
 // documentUpdated handles the document updated event, retrieving the document
 // root for the root frame.
 func (t *Target) documentUpdated(ctxt context.Context) {
-	f, err := t.WaitFrame(ctxt, cdp.EmptyFrameID)
-	if err == context.Canceled {
-		return // TODO: perhaps not necessary, but useful to keep the tests less noisy
-	}
-	if err != nil {
-		t.errf("could not get current frame: %v", err)
-		return
-	}
-
+	t.curMu.RLock()
+	f := t.cur
+	t.curMu.RUnlock()
 	f.Lock()
 	defer f.Unlock()
 
@@ -164,6 +155,7 @@ func (t *Target) documentUpdated(ctxt context.Context) {
 	}
 
 	f.Nodes = make(map[cdp.NodeID]*cdp.Node)
+	var err error
 	f.Root, err = dom.GetDocument().WithPierce(true).Do(ctxt, t)
 	if err == context.Canceled {
 		return // TODO: perhaps not necessary, but useful to keep the tests less noisy
@@ -179,110 +171,6 @@ func (t *Target) documentUpdated(ctxt context.Context) {
 // emptyObj is an empty JSON object message.
 var emptyObj = easyjson.RawMessage([]byte(`{}`))
 
-// GetRoot returns the current top level frame's root document node.
-func (t *Target) GetRoot(ctxt context.Context) (*cdp.Node, error) {
-	var root *cdp.Node
-
-	for {
-		select {
-		case <-ctxt.Done():
-			return nil, ctxt.Err()
-		default:
-			// continue below
-		}
-		t.RLock()
-		cur := t.cur
-		if cur != nil {
-			cur.RLock()
-			root = cur.Root
-			cur.RUnlock()
-		}
-		t.RUnlock()
-
-		if cur != nil && root != nil {
-			return root, nil
-		}
-
-		time.Sleep(DefaultCheckDuration)
-	}
-}
-
-// SetActive sets the currently active frame after a successful navigation.
-func (t *Target) SetActive(ctxt context.Context, id cdp.FrameID) error {
-	// get frame
-	f, err := t.WaitFrame(ctxt, id)
-	if err != nil {
-		return err
-	}
-
-	t.Lock()
-	defer t.Unlock()
-
-	t.cur = f
-	return nil
-}
-
-// WaitFrame waits for a frame to be loaded using the provided context.
-func (t *Target) WaitFrame(ctxt context.Context, id cdp.FrameID) (*cdp.Frame, error) {
-	// TODO: fix this
-	timeout := time.After(time.Second)
-
-	for {
-		select {
-		default:
-			var f *cdp.Frame
-			var ok bool
-
-			t.RLock()
-			if id == cdp.EmptyFrameID {
-				f, ok = t.cur, t.cur != nil
-			} else {
-				f, ok = t.frames[id]
-			}
-			t.RUnlock()
-
-			if ok {
-				return f, nil
-			}
-
-			time.Sleep(DefaultCheckDuration)
-
-		case <-ctxt.Done():
-			return nil, ctxt.Err()
-
-		case <-timeout:
-			return nil, fmt.Errorf("timeout waiting for frame `%s`", id)
-		}
-	}
-}
-
-// WaitNode waits for a node to be loaded using the provided context.
-func (t *Target) WaitNode(ctxt context.Context, f *cdp.Frame, id cdp.NodeID) (*cdp.Node, error) {
-	// TODO: fix this
-	timeout := time.After(time.Second)
-
-	for {
-		select {
-		default:
-			f.RLock()
-			n, ok := f.Nodes[id]
-			f.RUnlock()
-
-			if n != nil && ok {
-				return n, nil
-			}
-
-			time.Sleep(DefaultCheckDuration)
-
-		case <-ctxt.Done():
-			return nil, ctxt.Err()
-
-		case <-timeout:
-			return nil, fmt.Errorf("timeout waiting for node `%d`", id)
-		}
-	}
-}
-
 // pageEvent handles incoming page events.
 func (t *Target) pageEvent(ctxt context.Context, ev interface{}) {
 	var id cdp.FrameID
@@ -290,12 +178,10 @@ func (t *Target) pageEvent(ctxt context.Context, ev interface{}) {
 
 	switch e := ev.(type) {
 	case *page.EventFrameNavigated:
-		t.Lock()
 		t.frames[e.Frame.ID] = e.Frame
-		if t.cur != nil && t.cur.ID == e.Frame.ID {
-			t.cur = e.Frame
-		}
-		t.Unlock()
+		t.curMu.Lock()
+		t.cur = e.Frame
+		t.curMu.Unlock()
 		return
 
 	case *page.EventFrameAttached:
@@ -336,9 +222,6 @@ func (t *Target) pageEvent(ctxt context.Context, ev interface{}) {
 
 	f := t.frames[id]
 
-	t.Lock()
-	defer t.Unlock()
-
 	f.Lock()
 	defer f.Unlock()
 
@@ -347,12 +230,9 @@ func (t *Target) pageEvent(ctxt context.Context, ev interface{}) {
 
 // domEvent handles incoming DOM events.
 func (t *Target) domEvent(ctxt context.Context, ev interface{}) {
-	// wait current frame
-	f, err := t.WaitFrame(ctxt, cdp.EmptyFrameID)
-	if err != nil {
-		t.errf("could not process DOM event %T: %v", ev, err)
-		return
-	}
+	t.curMu.RLock()
+	f := t.cur
+	t.curMu.RUnlock()
 
 	var id cdp.NodeID
 	var op nodeOp
@@ -411,9 +291,6 @@ func (t *Target) domEvent(ctxt context.Context, ev interface{}) {
 		// Node ID has been invalidated. Nothing to do.
 		return
 	}
-
-	t.Lock()
-	defer t.Unlock()
 
 	f.Lock()
 	defer f.Unlock()
